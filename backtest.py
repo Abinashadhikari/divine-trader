@@ -43,7 +43,7 @@ def _atr(data: pd.DataFrame, period: int = 14) -> pd.Series:
 
 def _build_indicators(tickers: list, period: str) -> dict:
     """Download OHLCV and compute all indicators for both strategies."""
-    print(f"📥 Downloading {len(tickers)} tickers ({period}) ...")
+    print(f"Downloading Downloading {len(tickers)} tickers ({period}) ...")
     raw = yf.download(tickers, period=period, progress=False, group_by="ticker")
     indicators = {}
     for t in tickers:
@@ -53,7 +53,7 @@ def _build_indicators(tickers: list, period: str) -> dict:
             df = raw[t].copy()
         df = df.dropna()
         if len(df) < 60:
-            print(f"  ⚠️  {t}: insufficient data, skipping")
+            print(f"  WARN:  {t}: insufficient data, skipping")
             continue
 
         close = df["Close"]
@@ -172,7 +172,7 @@ def _run_improved(indicators: dict) -> pd.Series:
             elif row["cushion"] <= config.CUSHION_PANIC_PCT:
                 sell = True
             elif row["rsi"] >= config.RSI_SOFT_EXIT or row["price"] > row["upper_band"]:
-                # Soft exit → sell half
+                # Soft exit to sell half
                 sell_qty = max(1, held[t] // 2)
                 cash += sell_qty * row["price"]
                 held[t] -= sell_qty
@@ -249,16 +249,16 @@ def run(tickers: list, period: str = "2y"):
         print("No valid data. Exiting.")
         return
 
-    print("⚙️  Running original strategy...")
+    print("Running  Running original strategy...")
     eq_orig = _run_original(indicators)
-    print("⚙️  Running improved strategy...")
+    print("Running  Running improved strategy...")
     eq_new  = _run_improved(indicators)
 
     m_orig = _metrics(eq_orig, "Original")
     m_new  = _metrics(eq_new,  "Improved")
 
     print("\n" + "=" * 55)
-    print(f"  BACKTEST RESULTS  ({indicators[tickers[0]].index[50].date()} → {indicators[tickers[0]].index[-1].date()})")
+    print(f"  BACKTEST RESULTS  ({indicators[tickers[0]].index[50].date()} to {indicators[tickers[0]].index[-1].date()})")
     print("=" * 55)
     print(f"  {'Metric':<22} {'Original':>12} {'Improved':>12}")
     print(f"  {'-'*22} {'-'*12} {'-'*12}")

@@ -55,22 +55,20 @@ def is_market_open() -> tuple[bool, str]:
 def print_task_scheduler_instructions():
     """Prints step-by-step Windows Task Scheduler setup."""
     print("""
-╔══════════════════════════════════════════════════════════════╗
-║         Windows Task Scheduler Setup — divine-trader         ║
-╚══════════════════════════════════════════════════════════════╝
+=== Windows Task Scheduler Setup: divine-trader ===
 
 1. Open Task Scheduler (search "Task Scheduler" in Start)
 2. Click "Create Basic Task..."
 3. Name: "Divine Trader"  Description: "Hourly leveraged ETF agent"
-4. Trigger → Daily → Start: 09:00 AM
-5. Action → "Start a program"
-   Program: C:\\Users\\abina\\AppData\\Local\\Programs\\Python\\Python311\\python.exe
+4. Trigger -> Daily -> Start: 09:00 AM
+5. Action -> "Start a program"
+   Program: C:\\Users\\abina\\AppData\\Local\\Programs\\Python\\Python312\\python.exe
    Arguments: agent.py
    Start in: C:\\Users\\abina\\OneDrive\\Desktop\\divine-trader
-6. Finish → then open "Properties" on the task
-7. Triggers tab → Edit → check "Repeat task every: 1 hour"
+6. Finish -> then open "Properties" on the task
+7. Triggers tab -> Edit -> check "Repeat task every: 1 hour"
    for a duration of: "Indefinitely"
-8. Settings tab → check "Run task as soon as possible after a
+8. Settings tab -> check "Run task as soon as possible after a
    scheduled start is missed"
 
 The script checks market hours itself and exits silently if closed.
