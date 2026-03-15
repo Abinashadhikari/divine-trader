@@ -83,13 +83,15 @@ def calc_qty(
     base_budget = min(available * config.PER_RUN_DEPLOY_CAP_PCT,
                       portfolio_value * config.MAX_POSITION_CONC_PCT)
 
-    # ATR volatility scaling
+    # ATR volatility scaling: position size shrinks proportionally as ATR rises.
+    # Reference: ATR_MULTIPLIER * 1% daily range = "normal vol" → full position.
+    # High ATR (e.g. 20% daily range) → small position; low ATR → larger position.
     if atr and atr > 0 and price > 0:
-        vol_pct = atr / price
-        adjusted = base_budget / (vol_pct * config.ATR_MULTIPLIER)
-        # Clamp between 20% and 100% of base_budget
-        dollar_size = max(base_budget * 0.2, min(adjusted, base_budget))
-        reason = f"ATR-scaled: ${dollar_size:,.0f} (ATR={atr:.2f}, vol={vol_pct:.2%})"
+        vol_pct    = atr / price
+        normal_vol = config.ATR_MULTIPLIER * 0.01  # e.g. 2.0 * 0.01 = 2% is baseline
+        scale      = min(1.0, normal_vol / vol_pct) # 1.0 at normal vol, <1 when high vol
+        dollar_size = max(base_budget * 0.2, base_budget * scale)
+        reason = f"ATR-scaled: ${dollar_size:,.0f} (ATR={atr:.2f}, vol={vol_pct:.2%}, scale={scale:.2f})"
     else:
         dollar_size = base_budget
         reason = f"Fixed budget: ${dollar_size:,.0f} (ATR unavailable)"
