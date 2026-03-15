@@ -1,0 +1,56 @@
+name: Divine Trader — Hourly Agent
+
+on:
+  schedule:
+    # Every hour at :35, Mon-Fri, 13:00-21:00 UTC
+    # Covers 9:00 AM - 5:00 PM ET year-round (EDT=UTC-4, EST=UTC-5)
+    # agent.py self-guards: exits silently if market is closed
+    - cron: '35 13-21 * * 1-5'
+
+  # Allow manual trigger from GitHub Actions tab
+  workflow_dispatch:
+
+permissions:
+  contents: write   # needed to commit cooldown.json + trades.log back
+
+jobs:
+  trade:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install --quiet \
+            alpaca-py \
+            yfinance \
+            pandas \
+            numpy \
+            python-dotenv \
+            pytz
+
+      - name: Run trading agent
+        env:
+          ALPACA_KEY:    ${{ secrets.ALPACA_KEY }}
+          ALPACA_SECRET: ${{ secrets.ALPACA_SECRET }}
+          PAPER_TRADING: 'true'
+          DRY_RUN:       'false'
+        run: python agent.py
+
+      - name: Persist state (cooldown + trade log)
+        if: always()   # run even if agent exits early (market closed)
+        run: |
+          git config user.name  "Divine Trader Bot"
+          git config user.email "bot@divine-trader.local"
+          git add -f cooldown.json trades.log 2>/dev/null || true
+          git diff --staged --quiet || git commit -m "chore: trade state $(date -u '+%Y-%m-%d %H:%M UTC') [skip ci]"
+          git push

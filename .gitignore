@@ -1,9 +1,8 @@
 # Secrets
 .env
 
-# State & logs (local only)
-trades.log
-cooldown.json
+# State — tracked so GitHub Actions can persist cooldown and trade history
+# Exclude only local scratch state
 state.json
 
 # Python
