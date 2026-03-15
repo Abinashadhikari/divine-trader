@@ -86,6 +86,14 @@ def _build_indicators(tickers: list, period: str) -> dict:
             "trail_stop": trail_stop,
             "vol_ratio":  vol_ratio,
         })
+    # Align all indicators to a common date index (inner join — only dates all tickers share)
+    common_idx = None
+    for df in indicators.values():
+        common_idx = df.index if common_idx is None else common_idx.intersection(df.index)
+    for t in indicators:
+        indicators[t] = indicators[t].loc[common_idx]
+    print(f"  Common date range: {common_idx[0].date()} to {common_idx[-1].date()} ({len(common_idx)} days)")
+
     return indicators
 
 
