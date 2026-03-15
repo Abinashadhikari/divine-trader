@@ -53,24 +53,20 @@ def set_cooldown(ticker: str, side: str) -> None:
 # ─── ATR-based position sizing ────────────────────────────────────────────
 
 def calc_qty(
-    ticker:       str,
-    price:        float,
-    atr:          Optional[float],
-    buying_power: float,
-    portfolio_value: float,
+    ticker:           str,
+    price:            float,
+    atr:              Optional[float],
+    buying_power:     float,
+    portfolio_value:  float,
+    current_positions: int = 0,
 ) -> tuple[int, str]:
     """
-    Returns (qty, reason) for a BUY order.
+    Concentrated sizing: target 45% of portfolio per trade ($45K on $100K).
+    Max 2 positions — so when 1 is open, remaining slot gets up to 45% of what's left.
 
-    Sizing logic:
-      base_budget  = min(buying_power * PER_RUN_DEPLOY_CAP, portfolio * MAX_CONC)
-      If ATR available: scale budget inversely to volatility
-        volatility_pct = ATR / price
-        position_size  = base_budget / (volatility_pct * ATR_MULTIPLIER)
-        (higher ATR → smaller position)
-      Else: use base_budget directly.
+    ATR scaling applies within 80%-100% of target (high vol -> 80%, low vol -> 100%).
     """
-    # Hard floor: keep dry powder
+    # Hard floor: keep minimal dry powder (10%)
     dry_floor = max(
         config.DRY_POWDER_FLOOR_MIN,
         portfolio_value * config.DRY_POWDER_FLOOR_PCT,
@@ -79,22 +75,25 @@ def calc_qty(
     if available <= 0:
         return 0, "No budget above dry powder floor"
 
-    # Per-run deployment cap
-    base_budget = min(available * config.PER_RUN_DEPLOY_CAP_PCT,
-                      portfolio_value * config.MAX_POSITION_CONC_PCT)
+    # Target dollar size: 45% of total portfolio
+    target = portfolio_value * config.POSITION_SIZE_PCT  # e.g. $45K
 
-    # ATR volatility scaling: position size shrinks proportionally as ATR rises.
-    # Reference: ATR_MULTIPLIER * 1% daily range = "normal vol" → full position.
-    # High ATR (e.g. 20% daily range) → small position; low ATR → larger position.
+    # Slot-aware cap: don't over-deploy if already partly invested
+    slots_remaining = max(config.MAX_CONCURRENT_POSITIONS - current_positions, 1)
+    slot_cap = available / slots_remaining  # spread remaining cash across open slots
+
+    base_budget = min(target, slot_cap, available)
+
+    # ATR volatility scaling: 80%-100% of base_budget
     if atr and atr > 0 and price > 0:
         vol_pct    = atr / price
-        normal_vol = config.ATR_MULTIPLIER * 0.01  # e.g. 2.0 * 0.01 = 2% is baseline
-        scale      = min(1.0, normal_vol / vol_pct) # 1.0 at normal vol, <1 when high vol
-        dollar_size = max(base_budget * 0.2, base_budget * scale)
-        reason = f"ATR-scaled: ${dollar_size:,.0f} (ATR={atr:.2f}, vol={vol_pct:.2%}, scale={scale:.2f})"
+        normal_vol = config.ATR_MULTIPLIER * 0.01
+        scale      = min(1.0, max(0.8, normal_vol / vol_pct))  # clamp 80-100%
+        dollar_size = base_budget * scale
+        reason = f"Concentrated: ${dollar_size:,.0f} ({scale:.0%} of ${base_budget:,.0f} target, ATR={atr:.2f})"
     else:
         dollar_size = base_budget
-        reason = f"Fixed budget: ${dollar_size:,.0f} (ATR unavailable)"
+        reason = f"Concentrated: ${dollar_size:,.0f} (ATR unavailable, full target)"
 
     qty = int(dollar_size / price)
     if qty < 1:
@@ -138,7 +137,8 @@ def check_order(
     # 4. BUY-specific guards
     atr = market_data.get("atr")
     qty, size_reason = calc_qty(
-        ticker, signal.price, atr, buying_power, portfolio_value
+        ticker, signal.price, atr, buying_power, portfolio_value,
+        current_positions=len(positions),
     )
     if qty < 1:
         return False, f"Position sizing blocked: {size_reason}"

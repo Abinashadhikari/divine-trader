@@ -237,6 +237,127 @@ def _run_improved(indicators: dict) -> pd.Series:
     return pd.Series(history, index=dates[50:])
 
 
+# ─── Aggressive strategy simulation ───────────────────────────────────────
+
+def _run_aggressive(indicators: dict) -> pd.Series:
+    """
+    AI Boom Aggressive v2: tiered rotation, concentrated sizing, no weekly filter per-ticker.
+
+    Key differences from Improved:
+    - No weekly uptrend filter per ticker — tier rotation handles this
+    - RSI <= 50 (was 45), cushion <= -6% (was -8%), volume >= 0.8x (was 1.2x)
+    - Max 2 concurrent positions ($45K each on $100K = 90% deployed)
+    - Tighter exits: panic -12% (was -15%), trail stop 2x ATR (was 3x)
+    - Sector rotation: tier1 tickers vs tier3 based on weekly uptrend count
+    """
+    tier1    = set(config.TIER1)
+    tier3    = set(config.TIER3)
+    tickers  = list(indicators.keys())
+    cash     = START_CAPITAL
+    held     = {t: 0 for t in tickers}
+    last_buy = {t: None for t in tickers}
+    trade_count = 0
+    history  = []
+    dates    = next(iter(indicators.values())).index
+
+    for i in range(50, len(dates)):
+        d = dates[i]
+
+        # ── Determine active scan tier ────────────────────────────────────
+        tier1_up = sum(
+            1 for t in tickers
+            if t in tier1 and bool(indicators[t].iloc[i]["weekly_up"])
+        )
+        if tier1_up >= config.TIER1_HEALTHY_MIN:
+            scan_set = tier1 | (set(tickers) - tier1 - tier3)
+        else:
+            scan_set = (set(tickers) - tier1) | tier3
+
+        # ── Sells ─────────────────────────────────────────────────────────
+        for t in tickers:
+            if held[t] == 0:
+                continue
+            row  = indicators[t].iloc[i]
+            prev = indicators[t].iloc[i - 1]
+            sell = False
+
+            # Trailing ATR stop (2x ATR)
+            if not np.isnan(row["trail_stop"]) and row["price"] < row["trail_stop"]:
+                sell = True
+            # Panic cushion floor (-12%)
+            elif row["cushion"] <= config.CUSHION_PANIC_PCT:
+                sell = True
+            # Hard stop: 2-day confirmed close below SMA50
+            elif (row["price"] < row["sma50"] and prev["price"] < prev["sma50"]):
+                sell = True
+            # Soft exit: RSI overbought OR price above Bollinger upper band
+            elif row["rsi"] >= config.RSI_SOFT_EXIT or row["price"] > row["upper_band"]:
+                sell_qty = max(1, held[t] // 2)
+                cash += sell_qty * row["price"]
+                held[t] -= sell_qty
+                continue
+
+            if sell:
+                cash += held[t] * row["price"]
+                held[t] = 0
+
+        # ── Buys ──────────────────────────────────────────────────────────
+        open_positions = sum(1 for t in tickers if held[t] > 0)
+        if open_positions < config.MAX_CONCURRENT_POSITIONS:
+            candidates = []
+            for t in tickers:
+                if held[t] > 0 or t not in scan_set:
+                    continue
+                row = indicators[t].iloc[i]
+                if np.isnan(row["rsi"]):
+                    continue
+                on_cd  = last_buy[t] and (d - last_buy[t]).days < config.COOLDOWN_BUY_DAYS
+                vol_ok = np.isnan(row["vol_ratio"]) or row["vol_ratio"] >= config.VOLUME_CONFIRM_MULT
+                if (row["sma20"] >= row["sma50"] and
+                        row["rsi"] <= config.RSI_BUY_MAX and
+                        row["cushion"] <= config.CUSHION_BUY_PCT and
+                        vol_ok and not on_cd):
+                    candidates.append(t)
+
+            slots_left = config.MAX_CONCURRENT_POSITIONS - open_positions
+            for t in candidates[:slots_left]:
+                row = indicators[t].iloc[i]
+                p   = row["price"]
+                atr = row["atr"]
+
+                # Concentrated sizing: 45% of portfolio, ATR-scaled 80-100%
+                dry_floor  = max(config.DRY_POWDER_FLOOR_MIN,
+                                 START_CAPITAL * config.DRY_POWDER_FLOOR_PCT)
+                available  = max(cash - dry_floor, 0.0)
+                if available <= 0:
+                    continue
+                target = START_CAPITAL * config.POSITION_SIZE_PCT
+                slots_remaining = max(config.MAX_CONCURRENT_POSITIONS - open_positions, 1)
+                slot_cap = available / slots_remaining
+                base = min(target, slot_cap, available)
+
+                if not np.isnan(atr) and atr > 0 and p > 0:
+                    vol_pct    = atr / p
+                    normal_vol = config.ATR_MULTIPLIER * 0.01
+                    scale      = min(1.0, max(0.8, normal_vol / vol_pct))
+                    dollar     = base * scale
+                else:
+                    dollar = base
+
+                shares = int(dollar / p)
+                if shares > 0 and cash >= shares * p:
+                    cash -= shares * p
+                    held[t] += shares
+                    last_buy[t] = d
+                    trade_count += 1
+
+        total = cash + sum(held[t] * indicators[t].iloc[i]["price"] for t in tickers)
+        history.append(total)
+
+    print(f"  Aggressive trades executed: {trade_count}")
+    return pd.Series(history, index=dates[50:])
+
+
 # ─── Metrics ──────────────────────────────────────────────────────────────
 
 def _metrics(equity: pd.Series, label: str) -> dict:
@@ -257,25 +378,31 @@ def run(tickers: list, period: str = "2y"):
         print("No valid data. Exiting.")
         return
 
-    print("Running  Running original strategy...")
+    print("Running original strategy...")
     eq_orig = _run_original(indicators)
-    print("Running  Running improved strategy...")
+    print("Running improved strategy...")
     eq_new  = _run_improved(indicators)
+    print("Running aggressive strategy...")
+    eq_agg  = _run_aggressive(indicators)
 
     m_orig = _metrics(eq_orig, "Original")
     m_new  = _metrics(eq_new,  "Improved")
+    m_agg  = _metrics(eq_agg,  "Aggressive")
 
-    print("\n" + "=" * 55)
-    print(f"  BACKTEST RESULTS  ({indicators[tickers[0]].index[50].date()} to {indicators[tickers[0]].index[-1].date()})")
-    print("=" * 55)
-    print(f"  {'Metric':<22} {'Original':>12} {'Improved':>12}")
-    print(f"  {'-'*22} {'-'*12} {'-'*12}")
-    print(f"  {'Final Value':<22} ${m_orig['final']:>11,.0f} ${m_new['final']:>11,.0f}")
-    print(f"  {'Total Return':<22} {m_orig['return_pct']:>+11.1f}% {m_new['return_pct']:>+11.1f}%")
-    print(f"  {'Max Drawdown':<22} {m_orig['max_dd_pct']:>+11.1f}% {m_new['max_dd_pct']:>+11.1f}%")
-    print(f"  {'Sharpe Ratio':<22} {m_orig['sharpe']:>12.2f} {m_new['sharpe']:>12.2f}")
-    print("=" * 55)
-    winner = "Improved" if m_new["sharpe"] > m_orig["sharpe"] else "Original"
+    date_start = indicators[tickers[0]].index[50].date()
+    date_end   = indicators[tickers[0]].index[-1].date()
+    print("\n" + "=" * 70)
+    print(f"  BACKTEST RESULTS  ({date_start} to {date_end})")
+    print("=" * 70)
+    print(f"  {'Metric':<22} {'Original':>12} {'Improved':>12} {'Aggressive':>12}")
+    print(f"  {'-'*22} {'-'*12} {'-'*12} {'-'*12}")
+    print(f"  {'Final Value':<22} ${m_orig['final']:>11,.0f} ${m_new['final']:>11,.0f} ${m_agg['final']:>11,.0f}")
+    print(f"  {'Total Return':<22} {m_orig['return_pct']:>+11.1f}% {m_new['return_pct']:>+11.1f}% {m_agg['return_pct']:>+11.1f}%")
+    print(f"  {'Max Drawdown':<22} {m_orig['max_dd_pct']:>+11.1f}% {m_new['max_dd_pct']:>+11.1f}% {m_agg['max_dd_pct']:>+11.1f}%")
+    print(f"  {'Sharpe Ratio':<22} {m_orig['sharpe']:>12.2f} {m_new['sharpe']:>12.2f} {m_agg['sharpe']:>12.2f}")
+    print("=" * 70)
+    sharpes = {"Original": m_orig["sharpe"], "Improved": m_new["sharpe"], "Aggressive": m_agg["sharpe"]}
+    winner  = max(sharpes, key=sharpes.get)
     print(f"  Winner (Sharpe): {winner}\n")
 
 
