@@ -1,0 +1,54 @@
+name: Divine Trader — Daily Summary
+
+on:
+  schedule:
+    # 9:05 PM ET every weekday (01:05 UTC next day)
+    # Runs ~1 hour after market close to capture final state
+    - cron: '5 1 * * 2-6'
+
+  # Allow manual trigger from GitHub Actions tab
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  summarize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4.2.2
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5.4.0
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install --quiet \
+            alpaca-py \
+            yfinance \
+            pandas \
+            numpy \
+            python-dotenv \
+            pytz
+
+      - name: Generate daily summary
+        env:
+          ALPACA_KEY:    ${{ secrets.ALPACA_KEY }}
+          ALPACA_SECRET: ${{ secrets.ALPACA_SECRET }}
+          PAPER_TRADING: 'true'
+          DRY_RUN:       'false'
+        run: python daily_summary.py
+
+      - name: Commit DAILY_SUMMARY.md
+        run: |
+          git config user.name  "Divine Trader Bot"
+          git config user.email "bot@divine-trader.local"
+          git add DAILY_SUMMARY.md
+          git diff --staged --quiet || git commit -m "chore: daily summary $(date -u '+%Y-%m-%d') [skip ci]"
+          git push
